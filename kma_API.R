@@ -1,6 +1,7 @@
 library(httr)
 library(curl)
 library(jsonlite)
+library(dplyr)
 
 # start_d : 불러올 시작일 ex) 20100101
 # end_d : 불러올 종료일 ex) 20100102
@@ -13,7 +14,7 @@ library(jsonlite)
 
 get_time_kma <- function(start_d, end_d, start_h, end_h, location, personal_key){
   
-  # 시간을 한달 간격으로 묶기(왜냐하면 최대로 뽑을 수 있는 data가 999개니까 
+  # 시간을 한달 간격으로 묶기(왜냐하면 최대로 뽑을 수 있는 data가 999개니까)
   date_dat <- data.frame(date = seq.Date(lubridate::ymd(start_d), lubridate::ymd(end_d), by = "day"))
   date_dat$year <- lubridate::year(date_dat$date)
   date_dat$month <- lubridate::month(date_dat$date)
