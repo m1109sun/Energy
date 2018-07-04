@@ -9,6 +9,7 @@ library(dplyr)
 # end_h : 불러올 종료 시간 ex) 23
 # location : 지점 ex) 108(서울)
 # personal_key : 개인 API key
+# sample url : http://data.kma.go.kr/apiData/getData?type=xml&dataCd=ASOS&dateCd=HR&startDt=20100101&startHh=09&endDt=20100102&endHh=04&stnIds=108&schListCnt=10&pageIndex=1&apiKey=사용자api키
 
 # 시간 자료 불러오기
 
