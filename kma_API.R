@@ -82,5 +82,3 @@ processed_json$result$items
 
 str_trim(processed_json$result$items$address)
 
-
-
