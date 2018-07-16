@@ -88,7 +88,6 @@ kma_2016$date <- as.POSIXct(kma_2016$date)
 
 
 ## 15분 간격으로 값을 다 채우고 난 후, 평균을 냄
-## 그 다음에 kma_2016와 merge를 할 수 있음. 그런데 merge 전에 auto.arima를 할 지 merge 후에 auto.arima를 할 지는 잘 모르겠음(전 후로 값이 바뀌는지 확인해 볼 것
 
 ## Amelia  package 사용해보기
 
@@ -131,4 +130,65 @@ colnames(mean_energy) <- c("id", "date", "hour", "usage")
 mean_energy$time <- lubridate::ymd_h(paste(mean_energy$date, mean_energy$hour))
 mean_energy <- mean_energy %>%
   select("id", "time", "usage")
+
+
+# auto.arima는 Fit best ARIMA model to univariate time series
+# dcast로 데이터 모양 바꿔주고 auto.arima 해보기
+# 결과로는 ar_p가 1 : 46, 2 : 41, 3 : 62, 4 : 27, 5 : 82 이므로 따라서 ar(p)를 5로 선택함
+
+mean_energy_dcast <- reshape2::dcast(mean_energy, time ~ id, value.var = "usage")
+
+ar_order <- c()
+for(i in 2:259){
+  ar_id <- forecast::auto.arima(mean_energy_dcast[,i], d = 0, D = 0, max.q = 0)
+  ar_order[[i]] <- arimaorder(ar_id)[1]
+}
+
+ar_p <- c(ar_order)
+ar_p <- ar_p[-1]
+ar_p_table <- data.frame(table(ar_p))
+ggplot2::ggplot(ar_p_table, aes(ar_p, Freq, fill = ar_p)) + geom_bar(stat = "identity")
+
+## ar(5)
+
+### 정리된 코드 (converge가 안되므로 다른 방법을 사용해보자)
+y_matrix <- t(as.matrix(mean_energy_dcast[,-1])) # row : id, column : usage
+
+cov_mat <- diag(nrow(y_matrix))
+x_matrix <- matrix(1, nrow(y_matrix), ncol(y_matrix))
+ar_shift <- list()
+lm_coef <- list()
+
+cov_func <- function(initial, x_matrix, y_matrix, ar_order){
+  lm_matrix <- lm(c(y_matrix) ~ c(x_matrix))
+  for(l in 1:15){
+    # residual
+    lm_coef[[l]] <- coef(lm_matrix)[1]
+    lm_residual <- stats::residuals(lm_matrix)
+    res_matrix <- as.data.frame(matrix(lm_residual, nrow(y_matrix), byrow = FALSE))
+    colnames(res_matrix) <- NULL
+    cat(lm_coef[[l]], "\n")
+    # AR
+    t_res <- t(res_matrix) # 8784 * 258
+    for(i in 1:(ar_order + 1)){
+      ar_shift[[i]] <- c(t_res[i:(nrow(t_res) - ar_order + i - 1),])
+    }
+    ar_matrix <- data.frame(rlist::list.cbind(ar_shift))
+    c_name <- colnames(ar_matrix)
+    form <- paste0(c_name[ar_order + 1], " ~ ", paste0(c_name[-(ar_order+1)], collapse = " + "))
+    e <- stats::residuals(lm(as.formula(form), data = ar_matrix))
+    e_matrix <- matrix(e, nrow(res_matrix), byrow = TRUE) # 258 * 8779
+    # cov matrix
+    cov_mat <- e_matrix %*% t(e_matrix) / (ncol(y_matrix) - ar_order)
+    initial <- cov_mat
+    print(initial[1:6, 1:6])
+    # chol %*% matrix
+    half_chol <- t(solve(chol(initial)))
+    y_matrix_up <- half_chol %*% y_matrix
+    x_matrix_up <- half_chol %*% x_matrix
+    lm_matrix <- lm(c(y_matrix_up) ~ c(x_matrix_up))
+  }
+}
+
+cov_func(diag(258), x_matrix, y_matrix, 5)
 
