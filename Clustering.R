@@ -118,8 +118,6 @@ for(i in 1:length(energy_id)){
 
 na_fill_energy <- data.table::rbindlist(amd_id)
 
-
-
 ## 15분 간격으로 돼있는거 1시간 단위로 평균 내기
 
 mean_energy <- na_fill_energy %>% 
@@ -131,7 +129,6 @@ mean_energy$time <- lubridate::ymd_h(paste(mean_energy$date, mean_energy$hour))
 mean_energy <- mean_energy %>%
   select("id", "time", "usage")
 
-
 # auto.arima는 Fit best ARIMA model to univariate time series
 # dcast로 데이터 모양 바꿔주고 auto.arima 해보기
 # 결과로는 ar_p가 1 : 46, 2 : 41, 3 : 62, 4 : 27, 5 : 82 이므로 따라서 ar(p)를 5로 선택함
@@ -141,48 +138,55 @@ mean_energy_dcast <- reshape2::dcast(mean_energy, time ~ id, value.var = "usage"
 ar_order <- c()
 for(i in 2:259){
   ar_id <- forecast::auto.arima(mean_energy_dcast[,i], d = 0, D = 0, max.q = 0)
-  ar_order[[i]] <- arimaorder(ar_id)[1]
+  ar_order[[i-1]] <- forecast::arimaorder(ar_id)[1]
 }
 
 ar_p <- c(ar_order)
-ar_p <- ar_p[-1]
 ar_p_table <- data.frame(table(ar_p))
-ggplot2::ggplot(ar_p_table, aes(ar_p, Freq, fill = ar_p)) + geom_bar(stat = "identity")
+ggplot2::ggplot(ar_p_table, aes(x = ar_p, y = Freq, fill = ar_p)) + geom_bar(stat = "identity")
 
-## ar(5)
+# how to see source code
 
-### 정리된 코드 (converge가 안되므로 다른 방법을 사용해보자)
-y_matrix <- t(as.matrix(mean_energy_dcast[,-1])) # row : id, column : usage
+vcovHAC
+methods(vcovHAC)
+getAnywhere("vcovHAC.default")
 
-cov_mat <- diag(nrow(y_matrix))
+# for문을 이용한 code
+
+y_matrix <- t(as.matrix(mean_energy_dcast[,-1])) # row : id, column : usage (dim : 258 * 8784)
 x_matrix <- matrix(1, nrow(y_matrix), ncol(y_matrix))
-ar_shift <- list()
-lm_coef <- list()
 
 cov_func <- function(initial, x_matrix, y_matrix, ar_order){
+  cov_mat <- diag(nrow(y_matrix))
+  ar_shift <- list()
   lm_matrix <- lm(c(y_matrix) ~ c(x_matrix))
-  for(l in 1:15){
-    # residual
-    lm_coef[[l]] <- coef(lm_matrix)[1]
+  
+  for(l in 1:4){
+    ## ols
     lm_residual <- stats::residuals(lm_matrix)
-    res_matrix <- as.data.frame(matrix(lm_residual, nrow(y_matrix), byrow = FALSE))
+    res_matrix <- as.data.frame(matrix(data = lm_residual, nrow = ncol(y_matrix), byrow = FALSE))
+    # row : residual, column : id (dim : 8784 * 258)
     colnames(res_matrix) <- NULL
-    cat(lm_coef[[l]], "\n")
-    # AR
-    t_res <- t(res_matrix) # 8784 * 258
-    for(i in 1:(ar_order + 1)){
-      ar_shift[[i]] <- c(t_res[i:(nrow(t_res) - ar_order + i - 1),])
+    # res_matrix의 column 이름이 V1, V2... 이러니까 그냥 없앰
+    
+    ## AR
+    for(i in 1:(ar_order + 1)) {
+      ar_shift[[i]] <- unlist(res_matrix[i:(nrow(res_matrix) - ar_order + i - 1),]) # length : 2264982
     }
-    ar_matrix <- data.frame(rlist::list.cbind(ar_shift))
-    c_name <- colnames(ar_matrix)
-    form <- paste0(c_name[ar_order + 1], " ~ ", paste0(c_name[-(ar_order+1)], collapse = " + "))
+    ar_matrix <- data.frame(rlist::list.cbind(ar_shift)) # dim : 2264982 * 6
+    c_name <- colnames(ar_matrix) # X1, X2, X3, X4, X5, X6
+    form <- paste0(c_name[ar_order + 1], " ~ ", paste0(c_name[-(ar_order + 1)], collapse = " + "))
+    # X6 ~ X1 + X2 + X3 + X4 + X5
     e <- stats::residuals(lm(as.formula(form), data = ar_matrix))
-    e_matrix <- matrix(e, nrow(res_matrix), byrow = TRUE) # 258 * 8779
-    # cov matrix
-    cov_mat <- e_matrix %*% t(e_matrix) / (ncol(y_matrix) - ar_order)
+    e_matrix <- matrix(e, ncol = (nrow(res_matrix) - ar_order), byrow = TRUE)
+    # row : id, column : residual (dim : 258 * 8779)
+    
+    ## cov matrix
+    cov_mat <- (e_matrix %*% t(e_matrix)) / ncol(e_matrix)
     initial <- cov_mat
     print(initial[1:6, 1:6])
-    # chol %*% matrix
+    
+    ## chol %*% matrix
     half_chol <- t(solve(chol(initial)))
     y_matrix_up <- half_chol %*% y_matrix
     x_matrix_up <- half_chol %*% x_matrix
@@ -191,4 +195,127 @@ cov_func <- function(initial, x_matrix, y_matrix, ar_order){
 }
 
 cov_func(diag(258), x_matrix, y_matrix, 5)
+
+# while문을 이용한 code (전, 후의 차이가 0.001보다 작을 때 까지 반복)
+
+y_matrix <- t(as.matrix(mean_energy_dcast[,-1])) # row : id, column : usage (dim : 258 * 8784)
+x_matrix <- matrix(1, nrow(y_matrix), ncol(y_matrix))
+
+cov_func <- function(initial, x_matrix, y_matrix, ar_order, epsilon = 10^-3) {
+  error <- 100
+  cov_mat <- diag(nrow(y_matrix))
+  ar_shift <- list()
+  lm_matrix <- lm(c(y_matrix) ~ c(x_matrix))
+  
+  while(error > epsilon) {
+    ## ols
+    old_coef <- coef(lm_matrix)[1]
+    cat(old_coef, "\n")
+    lm_residual <- stats::residuals(lm_matrix)
+    res_matrix <- as.data.frame(matrix(data = lm_residual, nrow = ncol(y_matrix), byrow = FALSE))
+    # row : residual, column : id (dim : 8784 * 258)
+    colnames(res_matrix) <- NULL
+    # res_matrix의 column 이름이 V1, V2... 이러니까 그냥 없앰
+    
+    ## AR
+    for(i in 1:(ar_order + 1)) {
+      ar_shift[[i]] <- unlist(res_matrix[i:(nrow(res_matrix) - ar_order + i - 1),]) # length : 2264982
+    }
+    ar_matrix <- data.frame(rlist::list.cbind(ar_shift)) # dim : 2264982 * 6
+    c_name <- colnames(ar_matrix) # X1, X2, X3, X4, X5, X6
+    form <- paste0(c_name[ar_order + 1], " ~ ", paste0(c_name[-(ar_order + 1)], collapse = " + "))
+    # X6 ~ X1 + X2 + X3 + X4 + X5
+    e <- stats::residuals(lm(as.formula(form), data = ar_matrix))
+    e_matrix <- matrix(e, ncol = (nrow(res_matrix) - ar_order), byrow = TRUE)
+    # row : id, column : residual (dim : 258 * 8779)
+    
+    ## cov matrix
+    cov_mat <- (e_matrix %*% t(e_matrix)) / ncol(e_matrix)
+    initial <- cov_mat
+    print(initial[1:6, 1:6])
+    
+    ## chol %*% matrix
+    half_chol <- t(solve(chol(initial)))
+    y_matrix_up <- half_chol %*% y_matrix
+    x_matrix_up <- half_chol %*% x_matrix
+    lm_matrix <- lm(c(y_matrix_up) ~ c(x_matrix_up))
+    
+    new_coef <- coef(lm(c(y_matrix_up) ~ c(x_matrix_up)))[1]
+    error <- abs(old_coef - new_coef)
+    old_coef <- new_coef
+  }
+  
+  result <- list(mu = new_coef, sigma = cov_mat)
+  return(result)
+}
+
+cov_func(diag(258), x_matrix, y_matrix, 5)
+
+# while문을 이용한 code (두 개의 차이가 0.001보다 작을 때 까지 반복)
+
+y_matrix <- t(as.matrix(mean_energy_dcast[,-1])) # row : id, column : usage (dim : 258 * 8784)
+x_matrix <- matrix(1, nrow(y_matrix), ncol(y_matrix))
+
+cov_func <- function(initial, x_matrix, y_matrix, ar_order, epsilon = 10^-3) {
+  error <- 100; n <- 1;
+  cov_mat <- diag(nrow(y_matrix))
+  lm_coef <- list()
+  ar_shift <- list()
+  lm_matrix <- lm(c(y_matrix) ~ c(x_matrix))
+  
+  while(error > epsilon) {
+    ## ols
+    lm_residual <- stats::residuals(lm_matrix)
+    res_matrix <- as.data.frame(matrix(data = lm_residual, nrow = ncol(y_matrix), byrow = FALSE))
+    # row : residual, column : id (dim : 8784 * 258)
+    colnames(res_matrix) <- NULL
+    # res_matrix의 column 이름이 V1, V2... 이러니까 그냥 없앰
+    
+    ## AR
+    for(i in 1:(ar_order + 1)) {
+      ar_shift[[i]] <- unlist(res_matrix[i:(nrow(res_matrix) - ar_order + i - 1),]) # length : 2264982
+    }
+    ar_matrix <- data.frame(rlist::list.cbind(ar_shift)) # dim : 2264982 * 6
+    c_name <- colnames(ar_matrix) # X1, X2, X3, X4, X5, X6
+    form <- paste0(c_name[ar_order + 1], " ~ ", paste0(c_name[-(ar_order + 1)], collapse = " + "))
+    # X6 ~ X1 + X2 + X3 + X4 + X5
+    e <- stats::residuals(lm(as.formula(form), data = ar_matrix))
+    e_matrix <- matrix(e, ncol = (nrow(res_matrix) - ar_order), byrow = TRUE)
+    # row : id, column : residual (dim : 258 * 8779)
+    
+    ## cov matrix
+    cov_mat <- (e_matrix %*% t(e_matrix)) / ncol(e_matrix)
+    initial <- cov_mat
+    print(initial[1:6, 1:6])
+    
+    ## chol %*% matrix
+    half_chol <- t(solve(chol(initial)))
+    y_matrix_up <- half_chol %*% y_matrix
+    x_matrix_up <- half_chol %*% x_matrix
+    lm_matrix <- lm(c(y_matrix_up) ~ c(x_matrix_up))
+    
+    lm_coef[[n]] <- coef(lm(c(y_matrix_up) ~ c(x_matrix_up)))[1]
+    cat(lm_coef[[n]], "\n")
+    
+    if (n >= 3) {
+      error <- abs(lm_coef[[n]] - lm_coef[[n - 2]])
+    } else {
+      error <- abs(lm_coef[[n]] - 0)
+    }
+    
+    n <- n + 1
+  }
+  
+  result <- list(mu = lm_coef[[n - 1]], sigma = cov_mat)
+  return(result)
+}
+
+result <- cov_func(diag(258), x_matrix, y_matrix, 5)
+result$mu
+result$sigma
+
+
+
+
+
 
