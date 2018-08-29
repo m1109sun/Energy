@@ -522,6 +522,9 @@ cov_func(diag(258), x_matrix, y_matrix, 5)
 library(speccalt)
 
 
+aaa
+
+
 
 
 
