@@ -521,11 +521,6 @@ cov_func(diag(258), x_matrix, y_matrix, 5)
 ## 내가 정리한 affinity matrix는 거리가 멀수록 값이 작고, 거리가 가까울수록 값이 크다.
 library(speccalt)
 
-
-aaa
-
-
-
-
+aaaaaaa
 
 
