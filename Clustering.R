@@ -443,9 +443,22 @@ cov_func <- function(initial, x_temp, x_humi, y_matrix, ar_order) {
 cov_func(diag(258), x_temp, x_humi, y_matrix, 5)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 ######## 2018-08-23 수정
 
-# for문을 이용한 code  (이상해서 다시 바꿔보는 것.. 결과값이 그지같음.. 예전꺼랑 비슷함 variable addition)
+# for문을 이용한 code
 
 y_matrix <- t(as.matrix(mean_energy_dcast[,-1])) # row : id, column : time (dim : 258 * 8784)
 x_matrix <- matrix(1, nrow = nrow(y_matrix), ncol = ncol(y_matrix)) # dim : 258 * 8784
@@ -453,6 +466,7 @@ x_matrix <- matrix(1, nrow = nrow(y_matrix), ncol = ncol(y_matrix)) # dim : 258 
 cov_func <- function(initial, x_matrix, y_matrix, ar_order) {
   cov_mat <- diag(nrow(y_matrix))
   ar_shift <- list()
+  
   ## ols
   lm_matrix <- lm(c(y_matrix) ~ c(x_matrix))
   lm_residual <- stats::residuals(lm_matrix)
@@ -480,47 +494,43 @@ cov_func <- function(initial, x_matrix, y_matrix, ar_order) {
   initial <- cov_mat
   print(initial[1:6, 1:6])
     
-  ## Affinity matrix
-  # gaussian kernel
-  gaus_ker <- function(x1, x2, alpha = 1) {
-    - alpha * abs(as.matrix(x1 - x2))
+  ## Affinity matrix (Locally adapted RBF kernel function)
+  affi <- speccalt::local.rbfdot(cov_mat)
+  
+  
+  ## spectral clustering
+  clust <- speccalt::speccalt(affi)
+  
+  ## ols
+  g <- sort(unique(clust)) # 클러스터 개수 뽑아내기 (clust1 : 109, clust2 : 64, clust3 : 85)
+  all_mat <- matrix(1, nrow = nrow(y_matrix), ncol = ncol(y_matrix))
+  for(i in 1:length(g)) {
+    group <- which(clust == g[i])
+    group_y <- y_matrix[group, ]
+    group_x <- x_matrix[group, ]
+    group_lm <- lm(c(group_y) ~ c(group_x))
+    group_res <- stats::residuals(group_lm)
+    group_res_mat <- matrix(data = group_res, nrow = length(group), byrow = FALSE)
+    all_mat[group, ] <- group_res_mat
   }
-  # affinity matrix
-  make_simil <- function(my_data) {
-    N <- nrow(my_data)
-    simil <- diag(N)
-    for (i in 1:N) {
-      for (j in 1:N) {
-        simil[i, j] <- gaus_ker(my_data[i, ], my_data[j, ])
-      }
-    }
-    simil
-  }
   
-simil_mat <- make_simil(cov_mat)
+  ## cov matrix
+  cov_mat_up <- (all_mat %*% t(all_mat)) / ncol(all_mat)
+  initial <- cov_mat_up
   
-  
-  
-  
-  
-  
-  ## chol %*% matrix
-    half_chol <- t(solve(chol(initial)))
-    y_matrix_up <- half_chol %*% y_matrix
-    x_matrix_up <- half_chol %*% x_matrix
-    lm_matrix <- lm(c(y_matrix_up) ~ c(x_matrix_up))
-    lm_coef <- coef(lm(c(y_matrix_up) ~ c(x_matrix_up)))[1]
-    
-    cat(lm_coef, "\n")
-  }
+  ## chol %*% matrix (again)
+  half_chol <- t(solve(chol(initial)))
+  y_matrix_up <- half_chol %*% y_matrix
+  x_matrix_up <- half_chol %*% x_matrix
+  final_cov <- half_chol %*% cov_mat
+  final_cov
 }
 
 cov_func(diag(258), x_matrix, y_matrix, 5)
 
-## similarity measure는 두 개가 비슷할수록 값이 크고, 안 비슷할수록 0에 가깝거나 음수값을 가진다. (위키피디아) ## 원데이터에서 인접행렬을 만들 때는 보통 아래와 같이 가우시안 커널을 많이 사용함. 문서 간 거리가 멀리 떨어져 있을수록(유사하지 않을수록) 그 가중치는 줄어든다. 
+## similarity measure는 두 개가 비슷할수록 값이 크고, 안 비슷할수록 0에 가깝거나 음수값을 가진다. (위키피디아) 
+## 원데이터에서 인접행렬을 만들 때는 보통 아래와 같이 가우시안 커널을 많이 사용함. 문서 간 거리가 멀리 떨어져 있을수록(유사하지 않을수록) 그 가중치는 줄어든다. 
 ## 내가 정리한 affinity matrix는 거리가 멀수록 값이 작고, 거리가 가까울수록 값이 크다.
-library(speccalt)
 
-aaaaaaa
 
 
